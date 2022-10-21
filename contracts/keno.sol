@@ -2,19 +2,19 @@
 // unless funds are paid out between each round
 
 contract Keno {
-
+    // 0 is not a playable number
+    // how to solve 0 VRF: 1 + VRF % 69  
     enum State {PREPARING, RUNNING, FINISHED}
     mapping(address => mapping(int => bool)) active; // if player stake has been treated or not
-    mapping(address => mapping(int => bool)) keno; // if player participating in King Keno
-    mapping(address => mapping(int => uint256[])) tips; // player chosen numbers for given round
-    mapping(int => uint256[]) winners; // map roundid to winners + king keno
+    mapping(address => mapping(int => uint256[21])) tips; // player chosen numbers for given round
+    mapping(int => uint256[20]) winners; // map roundid to winners + king keno
     mapping(int => uint) kings;
     int round;
+    uint players; // number of players in the current round
     uint pool; // may only pay out the sum of the staked bets for a single round
 
     address public owner;
-    address payable[] public players;
-    uint256[] public winner; // drawn by VRF
+    uint256[20] public winner; // drawn by VRF
     uint public king; // drawn by VRF
     State public state;
 
@@ -27,19 +27,30 @@ contract Keno {
         pool = 0;
     }
 
-    function fee(uint _level, uint256[] memory _numbers, bool _keno) public payable returns (uint) { // fee calculated here or off-chain?
-        require(_numbers.length <= _level);
-        require(_keno == true); // temporary
+    function getRound() public view returns (int) {
+        return round;
+    }
 
+    function getPool() public view returns (uint) {
+        return pool;
+    }
+
+    function getPlayers() public view returns (uint) {
+        return players;
+    }
+
+    function fee(uint _level, uint256[21] memory _numbers) public view returns (uint) { // fee calculated here or off-chain?
+        require(_numbers.length >= _level); // temporary
+        // player is participating in King keno if _numbers[21] > 0
         return MIN_FEE;
     }
 
-    function enter(uint _level, uint256[] memory _numbers, bool _keno) public payable {
+    function enter(uint _level, uint256[21] memory _numbers) public payable {
         require(state == State.PREPARING);
-        require(msg.value == fee(_level, _numbers, _keno));
+        require(msg.value == fee(_level, _numbers));
         tips[msg.sender][round] = _numbers;
-        keno[msg.sender][round] = _keno;
         pool = pool + msg.value;
+        players = players + 1;
     }
 
     function withdraw() public payable {
@@ -51,12 +62,24 @@ contract Keno {
 
     function draw() public payable { // called by keeper, draws VRF number
         require(state == State.PREPARING);
+        require(players >= MIN_PLAYERS);
         state = State.RUNNING; // should pause for 15 minutes in RUNNING state, then draw numbers
-        winner = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
-        king = 21;
+        // requests random number from VRF ...
+    }
+
+    function reset() public { // called by oracle callback
+        require(state == State.RUNNING);
+        winner = [1, 2, 3]; //, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+        king = 21; 
+        // king keno can be determined by
+        // idx = winner[21] % 20; king = winner[idx]
 
         winners[round] = winner; // do this in callback function
         kings[round] = king; // and this
+        round = round + 1;
+        pool = 0;
+        players = 0;
+        state = State.PREPARING;
     }
 
     function payout(int round_id) public payable { // round participation is stored in DB
@@ -80,12 +103,9 @@ contract Keno {
         / - insurance vault should also be used to fund charity/ideal organization
         */
 
-    }
-
-    function reset() public {
-        require(state == State.RUNNING);
-        round = round + 1;
-        pool = 0;
-        state = State.PREPARING;
+        if (winners[round_id][0] == tips[msg.sender][round_id][0]) {
+            payable(msg.sender).transfer(MIN_FEE); // for testing
+            active[msg.sender][round_id] = false;
+        }
     }
 }
