@@ -9,6 +9,7 @@
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
+    "eslint": "^8.25.0",
     "vue": "^3.2.38"
   },
   "devDependencies": {
