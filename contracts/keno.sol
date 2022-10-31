@@ -1,35 +1,70 @@
+pragma solidity ^0.8.7;
 // skip using price feeds to calculate fees 
 // unless funds are paid out between each round
 
 contract Keno {
     // 0 is not a playable number
-    // temporary solution: 1 + VRF % 72  
+    // temporary solution: 1 + VRF % 70
     // not an equally distributed probability
+    // probably better to do linear search
     enum State {PREPARING, RUNNING, FINISHED}
     mapping(address => mapping(int => bool)) active; // if player stake has been paid/withdrawn or not
-    mapping(address => mapping(int => uint)) levels; // player Keno level
-    mapping(address => mapping(int => uint256[4])) tips; // player chosen numbers for given round # 4 for testing 21 for live
-    mapping(int => uint256[3]) winners; // map roundid to winners + king keno # 3 for testing 20 for live
+    mapping(address => mapping(int => uint)) levels; // player Keno level, needs to be provided and cant simply be encoded in tips
+    mapping(address => mapping(int => uint256[12])) tips; // player chosen numbers for given round. 11 long, unplayed levels marked with 0, last for king keno
+    mapping(int => uint256[20]) winners; // map roundid to winners 
     mapping(int => uint) kings;
     int round;
     uint players; // number of players in the current round
-    uint pool; // may only pay out the sum of the staked bets for a single round
-    uint past; // sum of previous pool, can be paid out between lotteries
+    uint pool; // carries amount of bets for upcoming round
+    uint past; // sum of previous pool, subtracted from payouts
+    uint reserve; // accumulated reserves by sum of pasts
+
 
     bool win; // temporary variable used in winnings calculation
 
     address public owner;
-    uint256[3] public winner; // drawn by VRF
+    uint256[20] public winner; // drawn by VRF
     uint public king; // drawn by VRF
     State public state;
 
     uint public MIN_PLAYERS = 1;
-    uint public MIN_FEE = 1000; // 1000 gwei minimum
+    uint public BASE_FEE = 500; // 1000 gwei minimum, for simplicity only offer one bet size. 100 gwei = 1 sek
+
+    mapping(uint => uint256[12]) table; // keno win table - no king
+    mapping(uint => uint256[12]) kable; // keno win table - with king
+
 
     constructor() {
         owner = msg.sender;
         round = 1;
         pool = 0;
+        reserve = 0;
+
+        // construction of regular keno table
+        table[1] = [0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        table[2] = [0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        table[3] = [0, 0, 2, 7, 0, 0, 0, 0, 0, 0, 0, 0];
+        table[4] = [0, 0, 1, 3, 10, 0, 0, 0, 0, 0, 0, 0];
+        table[5] = [0, 0, 0, 2, 7, 10, 0, 0, 0, 0, 0, 0];
+        table[6] = [0, 0, 0, 1, 4, 13, 170, 0, 0, 0, 0, 0];
+        table[7] = [0, 0, 0, 0, 2, 13, 40, 1000, 0, 0, 0, 0];
+        table[8] = [0, 0, 0, 0, 2, 2, 20, 100, 4500, 0, 0, 0];
+        table[9] = [0, 0, 0, 0, 0, 2, 14, 60, 540, 25000, 0, 0];
+        table[10] = [1, 0, 0, 0, 0, 2, 4, 20, 160, 1500, 100000, 0];
+        table[11] = [0, 0, 0, 0, 0, 2, 2, 5, 40, 400, 8000, 500000];
+
+        // construction of king keno table
+        kable[1] = [0, 39, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        kable[2] = [0, 8, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        kable[3] = [0, 7, 12, 50, 0, 0, 0, 0, 0, 0, 0, 0];
+        kable[4] = [0, 7, 8, 11, 100, 0, 0, 0, 0, 0, 0, 0];
+        kable[5] = [0, 10, 4, 7, 20, 250, 0, 0, 0, 0, 0, 0];
+        kable[6] = [0, 8, 3, 5, 10, 32, 1000, 0, 0, 0, 0, 0];
+        kable[7] = [0, 8, 2, 4, 6, 30, 100, 2500, 0, 0, 0, 0];
+        kable[8] = [0, 8, 3, 3, 4, 6, 68, 200, 13000, 0, 0, 0];
+        kable[9] = [0, 10, 2, 3, 3, 5, 20, 100, 1000, 60000, 0, 0];
+        kable[10] = [0, 8, 2, 2, 3, 4, 10, 50, 320, 3000, 200000, 0];
+        kable[11] = [0, 20, 2, 2, 2, 3, 4, 24, 100, 800, 16000, 1000000];
     }
 
     function getRound() public view returns (int) {
@@ -44,24 +79,71 @@ contract Keno {
         return players;
     }
 
-    function fee(uint _level, uint256[4] memory _numbers) public view returns (uint) { // fee calculated here 
-        require(_numbers.length >= _level); // temporary
-        // player is participating in King keno if _numbers[21] > 0
-        return MIN_FEE;
+    function historicWinners(int _round) public view returns (uint256[20] memory) {
+        return winners[_round];
     }
 
-    function winnings(uint _level, uint[4] memory _tips, uint[3] memory _winners, bool _keno) public returns (bool) { // compare Keno outside this function
-        require(_tips.length >= _level);
-        win = false;
-        if (_winners[0] == _tips[0] || _keno) {
-            win = true;
+    function historicKings(int _round) public view returns (uint) {
+        return kings[_round];
+    }
+
+    function tipLength(uint256[12] memory _numbers) public pure returns (uint) {
+        uint len;
+        uint i;
+        for (i = 0; i < _numbers.length - 1; i++) { // last entry is the King flag
+            if (_numbers[i] > 0) {
+                len++;
+            }
         }
-        return win;
+        return len;
     }
 
-    function enter(uint _level, uint256[4] memory _numbers) public payable {
+    function kingKeno(uint256[12] memory _numbers, uint _king) public pure returns (bool) { 
+        // calculates whether played tips contain King or not
+        bool _keno;
+        uint i;
+        for (i = 0; i < _numbers.length - 1; i++) { // last entry is the King flag
+            if (_numbers[i] == _king) {
+                _keno = true;
+            }
+        }
+        return _keno;
+    }
+
+    function count(uint256[12] memory _numbers, uint _len, uint256[20] memory _winners) public pure returns (uint) {
+        // calculates how many of player numbers were in the winners
+        uint i;
+        uint j;
+        uint w;
+        for (i = 0; i < _len; i++) { // avoid some calculation here since len already known
+            for (j = 0; j < _winners.length; j++) {
+                if (_numbers[i] == _winners[j]) {
+                    w = w + 1;
+                }
+            }
+        }
+        return w;
+    }
+
+    function fee(uint _level, uint256[12] memory _numbers) public view returns (uint) { // fee calculated here 
+        require(_level >= tipLength(_numbers), "Too many numbers for Keno level");
+        if (_numbers[11] > 0) { // player is participating in King keno if _numbers[11] > 0
+            return 4 * BASE_FEE; // king keno is 2x fee
+        }
+        return 2 * BASE_FEE; // fee is independent of keno level, keno level dictates probability/payout
+    }
+
+    function winnings(uint _level, uint _wins, bool _keno) public view returns (uint) { // compare Keno outside this function
+        require(_level >= _wins);
+        if (_keno) { // returns number of correct 
+            return kable[_level][_wins];
+        }
+        return table[_level][_wins];
+    }
+
+    function enter(uint _level, uint256[12] memory _numbers) public payable {
         require(state == State.PREPARING);
-        require(msg.value == fee(_level, _numbers));
+        require(msg.value == fee(_level, _numbers), "Wrong amount provided");
         tips[msg.sender][round] = _numbers;
         active[msg.sender][round] = true;
         levels[msg.sender][round] = _level;
@@ -69,12 +151,13 @@ contract Keno {
         players = players + 1;
     }
 
-    function withdraw() public payable {
+    function withdraw(int _round) public payable {
         require(state == State.PREPARING);
-        require(active[msg.sender][round] == true);
-        players = players - 1;
+        require(active[msg.sender][_round] == true);
         // pay out based on fee calculation
         // past = past - fee()
+        players = players - 1;
+        active[msg.sender][_round] = false;
     }
 
     function draw() public payable { // called by keeper, draws VRF number
@@ -86,24 +169,34 @@ contract Keno {
 
     function reset() public { // called by oracle callback
         require(state == State.RUNNING);
-        winner = [1, 2, 3]; //, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
-        king = 21; 
+        winner = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+        king = 9; 
         // king keno can be determined by
         // idx = winner[21] % 20; king = winner[idx]
-
+        reserve = reserve + past;
         winners[round] = winner; // do this in callback function
         kings[round] = king; // and this
-        round = round + 1;
+        round = round + 1; // this is the start of the real reset function
         past = pool;
         pool = 0;
         players = 0;
         state = State.PREPARING;
+        // balance = reserve + past + pool
     }
 
+    function calculate(uint _claim) public pure returns (uint) { // calculates how much you won; balances with vault to maintain protocol solvency
+        /* Payout priority
+        / 1. Payout _claim if _claim <= past; past = past - _claim;
+        / 2. Payout _claim if _claim > past and _claim - past < 0.5 * reserve; reserve = reserve - _claim + past; past = 0;
+        / 3. Payout _claim if _claim < 0.5 * reserve; reserve = reserve - _claim;
+        / 4. Payout reserve / 2; reserve = reserve / 2;
+        */
+        return _claim;
+    }
 
-    function payout(int round_id) public payable { // round participation is stored in DB
+    function payout(int _round) public payable { // round participation is stored in DB
         require(state == State.PREPARING || state == State.FINISHED);
-        require(active[msg.sender][round_id] == true, "Player is not active in this round");
+        require(active[msg.sender][_round] == true, "Player is not active in this round");
         // this needs some thought - how does smart contract know how many have won and how much?
         // what happens if there are more winning claims than deposited funds in a round?
 
@@ -121,17 +214,17 @@ contract Keno {
         / 
         / - insurance vault should also be used to fund charity/ideal organization
         */
-        
-        if (tips[msg.sender][round_id][3] > 0 && tips[msg.sender][round_id][3] == kings[round_id]) {
-            if (winnings(levels[msg.sender][round_id], tips[msg.sender][round_id], winners[round_id], true)) {
-                payable(msg.sender).transfer(MIN_FEE); // for testing
-                active[msg.sender][round_id] = false;
+        uint wins = count(tips[msg.sender][_round], levels[msg.sender][_round], winners[_round]);
+        if (tips[msg.sender][_round][11] > 0 && kingKeno(tips[msg.sender][_round], kings[_round])) {
+            if (winnings(levels[msg.sender][_round], wins, true) > 0) {
+                payable(msg.sender).transfer(2*BASE_FEE); // for testing, replace with calculate(winnings(levels[msg.sender][_round], _wins, true), past, reserve)
+                active[msg.sender][_round] = false;
             }
         }
         else {
-            if (winnings(levels[msg.sender][round_id], tips[msg.sender][round_id], winners[round_id], false)) {
-                payable(msg.sender).transfer(MIN_FEE); // for testing
-                active[msg.sender][round_id] = false;
+            if (winnings(levels[msg.sender][_round], wins, false) > 0) {
+                payable(msg.sender).transfer(BASE_FEE); // for testing
+                active[msg.sender][_round] = false;
             }
         }
     }
