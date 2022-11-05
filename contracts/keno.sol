@@ -13,14 +13,11 @@ contract Keno {
     mapping(address => mapping(int => uint256[12])) tips; // player chosen numbers for given round. 11 long, unplayed levels marked with 0, last for king keno
     mapping(int => uint256[20]) winners; // map roundid to winners 
     mapping(int => uint) kings;
-    int round;
+    int round; // current round
     uint players; // number of players in the current round
     uint pool; // carries amount of bets for upcoming round
-    uint past; // sum of previous pool, subtracted from payouts
+    uint past; // sum of previous pool, subtracted by payouts
     uint reserve; // accumulated reserves by sum of pasts
-
-
-    bool win; // temporary variable used in winnings calculation
 
     address public owner;
     uint256[20] public winner; // drawn by VRF
@@ -28,7 +25,7 @@ contract Keno {
     State public state;
 
     uint public MIN_PLAYERS = 1;
-    uint public BASE_FEE = 500; // 1000 gwei minimum, for simplicity only offer one bet size. 100 gwei = 1 sek
+    uint public BASE_FEE = 5 * 10 ** 8; // 1 gwei minimum entry, for simplicity only offer one bet size. 1 gwei = 10 sek in comparison
 
     mapping(uint => uint256[12]) table; // keno win table - no king
     mapping(uint => uint256[12]) kable; // keno win table - with king
@@ -67,6 +64,21 @@ contract Keno {
         kable[11] = [0, 20, 2, 2, 2, 3, 4, 24, 100, 800, 16000, 1000000];
     }
 
+    function newMinPlayers(uint _newPlayers) public {
+        require(msg.sender == owner);
+        MIN_PLAYERS = _newPlayers;
+    }
+
+    function newBaseFee(uint _newFee) public {
+        require(msg.sender == owner);
+        BASE_FEE = _newFee;
+    }
+
+    function deposit() public payable {
+        require(msg.sender == owner);
+        reserve = reserve + msg.value;
+    }
+
     function getRound() public view returns (int) {
         return round;
     }
@@ -78,6 +90,14 @@ contract Keno {
     function getPlayers() public view returns (uint) {
         return players;
     }
+
+    function getReserve() public view returns (uint) {
+        return reserve;
+    }
+
+    function isActive(int _round) public view returns (bool) {
+        return active[msg.sender][_round];
+    } 
 
     function historicWinners(int _round) public view returns (uint256[20] memory) {
         return winners[_round];
@@ -135,10 +155,10 @@ contract Keno {
 
     function winnings(uint _level, uint _wins, bool _keno) public view returns (uint) { // compare Keno outside this function
         require(_level >= _wins);
-        if (_keno) { // returns number of correct 
-            return kable[_level][_wins];
+        if (_keno) { // all payout tables are calculated with multiple of 10, minamount is 5
+            return 2 * kable[_level][_wins];
         }
-        return table[_level][_wins];
+        return 2 * table[_level][_wins];
     }
 
     function enter(uint _level, uint256[12] memory _numbers) public payable {
@@ -154,8 +174,15 @@ contract Keno {
     function withdraw(int _round) public payable {
         require(state == State.PREPARING);
         require(active[msg.sender][_round] == true);
+        require(round == _round, "Round already done");
         // pay out based on fee calculation
         // past = past - fee()
+        if (tips[msg.sender][_round][11] > 0) {
+            payable(msg.sender).transfer(BASE_FEE * 2);
+        }
+        else {
+            payable(msg.sender).transfer(BASE_FEE);
+        }
         players = players - 1;
         active[msg.sender][_round] = false;
     }
@@ -184,14 +211,26 @@ contract Keno {
         // balance = reserve + past + pool
     }
 
-    function calculate(uint _claim) public pure returns (uint) { // calculates how much you won; balances with vault to maintain protocol solvency
+    function calculate(uint _claim) private returns (uint) { // calculates how much you won; balances with vault to maintain protocol solvency
         /* Payout priority
         / 1. Payout _claim if _claim <= past; past = past - _claim;
         / 2. Payout _claim if _claim > past and _claim - past < 0.5 * reserve; reserve = reserve - _claim + past; past = 0;
         / 3. Payout _claim if _claim < 0.5 * reserve; reserve = reserve - _claim;
         / 4. Payout reserve / 2; reserve = reserve / 2;
         */
-        return _claim;
+        if (_claim <= past) {
+            return _claim;
+        }
+        else if (_claim - past < reserve / 2) {
+            reserve = reserve - _claim + past; // possible that these state changes should happen outside
+            past = 0;
+            return _claim;
+        }
+        else {
+            _claim = reserve / 2;
+            reserve = _claim;
+            return _claim;
+        }
     }
 
     function payout(int _round) public payable { // round participation is stored in DB
@@ -199,7 +238,6 @@ contract Keno {
         require(active[msg.sender][_round] == true, "Player is not active in this round");
         // this needs some thought - how does smart contract know how many have won and how much?
         // what happens if there are more winning claims than deposited funds in a round?
-
         /*
         / - one solution is to maintain a surplus at all times 
         / otherwise necessary to iterate over all deposited bets in a round - not feasible
@@ -217,13 +255,13 @@ contract Keno {
         uint wins = count(tips[msg.sender][_round], levels[msg.sender][_round], winners[_round]);
         if (tips[msg.sender][_round][11] > 0 && kingKeno(tips[msg.sender][_round], kings[_round])) {
             if (winnings(levels[msg.sender][_round], wins, true) > 0) {
-                payable(msg.sender).transfer(2*BASE_FEE); // for testing, replace with calculate(winnings(levels[msg.sender][_round], _wins, true), past, reserve)
+                payable(msg.sender).transfer(BASE_FEE * calculate(winnings(levels[msg.sender][_round], wins, true)));
                 active[msg.sender][_round] = false;
             }
         }
         else {
             if (winnings(levels[msg.sender][_round], wins, false) > 0) {
-                payable(msg.sender).transfer(BASE_FEE); // for testing
+                payable(msg.sender).transfer(BASE_FEE * calculate(winnings(levels[msg.sender][_round], wins, false)));
                 active[msg.sender][_round] = false;
             }
         }
