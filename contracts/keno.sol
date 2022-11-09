@@ -25,7 +25,7 @@ contract Keno {
     State public state;
 
     uint public MIN_PLAYERS = 1;
-    uint public BASE_FEE = 5 * 10 ** 8; // 1 gwei minimum entry, for simplicity only offer one bet size. 1 gwei = 10 sek in comparison
+    uint public BASE_FEE = 5 * 10 ** 10; // 100 gwei minimum entry, for simplicity only offer one bet size. 100 gwei = 10 sek in comparison
 
     mapping(uint => uint256[12]) table; // keno win table - no king
     mapping(uint => uint256[12]) kable; // keno win table - with king
@@ -65,12 +65,12 @@ contract Keno {
     }
 
     function newMinPlayers(uint _newPlayers) public {
-        require(msg.sender == owner);
+        require(msg.sender == owner); // add require state == State.RUNNING
         MIN_PLAYERS = _newPlayers;
     }
 
     function newBaseFee(uint _newFee) public {
-        require(msg.sender == owner);
+        require(msg.sender == owner); // add require state == State.RUNNING
         BASE_FEE = _newFee;
     }
 
@@ -85,6 +85,10 @@ contract Keno {
 
     function getPool() public view returns (uint) {
         return pool;
+    }
+
+    function getPast() public view returns (uint) {
+        return past;
     }
 
     function getPlayers() public view returns (uint) {
@@ -219,11 +223,16 @@ contract Keno {
         / 4. Payout reserve / 2; reserve = reserve / 2;
         */
         if (_claim <= past) {
+            past = past - _claim;
             return _claim;
         }
-        else if (_claim - past < reserve / 2) {
+        else if (_claim - past < reserve / 2 && past > 0) {
             reserve = reserve - _claim + past; // possible that these state changes should happen outside
             past = 0;
+            return _claim;
+        }
+        else if (_claim < reserve / 2) {
+            reserve = reserve - _claim;
             return _claim;
         }
         else {
@@ -255,13 +264,13 @@ contract Keno {
         uint wins = count(tips[msg.sender][_round], levels[msg.sender][_round], winners[_round]);
         if (tips[msg.sender][_round][11] > 0 && kingKeno(tips[msg.sender][_round], kings[_round])) {
             if (winnings(levels[msg.sender][_round], wins, true) > 0) {
-                payable(msg.sender).transfer(BASE_FEE * calculate(winnings(levels[msg.sender][_round], wins, true)));
+                payable(msg.sender).transfer(calculate(BASE_FEE * winnings(levels[msg.sender][_round], wins, true)));
                 active[msg.sender][_round] = false;
             }
         }
         else {
             if (winnings(levels[msg.sender][_round], wins, false) > 0) {
-                payable(msg.sender).transfer(BASE_FEE * calculate(winnings(levels[msg.sender][_round], wins, false)));
+                payable(msg.sender).transfer(calculate(BASE_FEE * winnings(levels[msg.sender][_round], wins, false)));
                 active[msg.sender][_round] = false;
             }
         }
