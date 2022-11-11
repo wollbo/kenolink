@@ -2,7 +2,11 @@ pragma solidity ^0.8.7;
 // skip using price feeds to calculate fees 
 // unless funds are paid out between each round
 
-contract Keno {
+import "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
+import "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
+import "@chainlink/contracts/src/v0.8/ConfirmedOwner.sol";
+
+contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
     // 0 is not a playable number
     // temporary solution: 1 + VRF % 70
     // not an equally distributed probability
@@ -19,7 +23,7 @@ contract Keno {
     uint past; // sum of previous pool, subtracted by payouts
     uint reserve; // accumulated reserves by sum of pasts
 
-    address public owner;
+    address public contractOwner;
     uint256[20] public winner; // drawn by VRF
     uint public king; // drawn by VRF
     State public state;
@@ -30,9 +34,49 @@ contract Keno {
     mapping(uint => uint256[12]) table; // keno win table - no king
     mapping(uint => uint256[12]) kable; // keno win table - with king
 
+    // VRF code below here
+    event RequestSent(uint256 requestId, uint32 numWords);
+    event RequestFulfilled(uint256 requestId, uint256[] randomWords);
 
-    constructor() {
-        owner = msg.sender;
+    struct RequestStatus {
+        bool fulfilled; // whether the request has been successfully fulfilled
+        bool exists; // whether a requestId exists
+        uint256[] randomWords;
+    }
+    mapping(uint256 => RequestStatus) public s_requests; /* requestId --> requestStatus */
+    VRFCoordinatorV2Interface COORDINATOR;
+
+    // Your subscription ID.
+    uint64 s_subscriptionId;
+
+    // past requests Id.
+    uint256[] public requestIds;
+    uint256 public lastRequestId;
+
+    // The gas lane to use, which specifies the maximum gas price to bump to.
+    // For a list of available gas lanes on each network,
+    // see https://docs.chain.link/docs/vrf/v2/subscription/supported-networks/#configurations
+    bytes32 keyHash = 0x4b09e658ed251bcafeebbc69400383d49f344ace09b9576fe248bb02c003fe9f;
+
+    // Depends on the number of requested values that you want sent to the
+    // fulfillRandomWords() function. Storing each word costs about 20,000 gas
+    uint32 callbackGasLimit = 2500000; // maximum
+
+    // The default is 3, but you can set this higher.
+    uint16 requestConfirmations = 3;
+
+    // For this example, retrieve 2 random values in one request.
+    // Cannot exceed VRFCoordinatorV2.MAX_NUM_WORDS.
+    uint32 numWords = 100; // would be better to just select 1 word and segment it into 20 pairs of two
+
+    constructor(uint64 _subscriptionId)
+        VRFConsumerBaseV2(0x7a1BaC17Ccc5b313516C5E16fb24f7659aA5ebed)
+        ConfirmedOwner(msg.sender)
+    {
+        COORDINATOR = VRFCoordinatorV2Interface(0x7a1BaC17Ccc5b313516C5E16fb24f7659aA5ebed);
+        s_subscriptionId = _subscriptionId;
+
+        contractOwner = msg.sender;
         round = 1;
         pool = 0;
         reserve = 0;
@@ -64,18 +108,73 @@ contract Keno {
         kable[11] = [0, 20, 2, 2, 2, 3, 4, 24, 100, 800, 16000, 1000000];
     }
 
+    // Assumes the subscription is funded sufficiently.
+    function requestRandomWords() internal onlyOwner returns (uint256 requestId) {
+        // Will revert if subscription is not set and funded.
+        requestId = COORDINATOR.requestRandomWords(
+            keyHash,
+            s_subscriptionId,
+            requestConfirmations,
+            callbackGasLimit,
+            numWords
+        );
+        s_requests[requestId] = RequestStatus({randomWords: new uint256[](0), exists: true, fulfilled: false});
+        requestIds.push(requestId);
+        lastRequestId = requestId;
+        emit RequestSent(requestId, numWords);
+        return requestId;
+    }
+
+    function convertToWinner(uint256[] memory _randomWords) public pure returns (uint256[20] memory) { // we just take one random word and segment it
+        uint len;
+        uint256[20] memory _winners;
+        uint i;
+        uint j;
+        bool exists;
+        uint number;
+        while (i < _randomWords.length - 1 && len < 20) { // two digit numbers
+            exists = false; // reset here 
+            number = _randomWords[i] % 69 + 1; // we dont want zero
+            while (j < len && exists == false) {
+                if (_winners[j] == number) {
+                    exists = true;
+                }
+                j++;
+            }
+            if (exists == false) {
+                _winners[len] = number;
+                len++;
+            }
+            i = i++;
+        }
+        return _winners;
+    } 
+
+    function fulfillRandomWords(uint256 _requestId, uint256[] memory _randomWords) internal override {
+        require(s_requests[_requestId].exists, 'request not found');
+        s_requests[_requestId].fulfilled = true;
+        s_requests[_requestId].randomWords = _randomWords;
+        emit RequestFulfilled(_requestId, _randomWords);
+    }
+
+    function getRequestStatus(uint256 _requestId) external view returns (bool fulfilled, uint256[] memory randomWords) {
+        require(s_requests[_requestId].exists, 'request not found');
+        RequestStatus memory request = s_requests[_requestId];
+        return (request.fulfilled, request.randomWords);
+    }
+
     function newMinPlayers(uint _newPlayers) public {
-        require(msg.sender == owner); // add require state == State.RUNNING
+        require(msg.sender == contractOwner); // add require state == State.RUNNING
         MIN_PLAYERS = _newPlayers;
     }
 
     function newBaseFee(uint _newFee) public {
-        require(msg.sender == owner); // add require state == State.RUNNING
+        require(msg.sender == contractOwner); // add require state == State.RUNNING
         BASE_FEE = _newFee;
     }
 
     function deposit() public payable {
-        require(msg.sender == owner);
+        require(msg.sender == contractOwner);
         reserve = reserve + msg.value;
     }
 
@@ -195,12 +294,15 @@ contract Keno {
         require(state == State.PREPARING);
         require(players >= MIN_PLAYERS);
         state = State.RUNNING; // should pause for 15 minutes in RUNNING state, then draw numbers
+        requestRandomWords();
         // requests random number from VRF ...
     }
 
     function reset() public { // called by oracle callback
         require(state == State.RUNNING);
-        winner = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+        require(s_requests[lastRequestId].fulfilled == true, "Request not yet fulfilled");
+        RequestStatus memory request = s_requests[lastRequestId];
+        winner = convertToWinner(request.randomWords); // this needs error control 
         king = 9; 
         // king keno can be determined by
         // idx = winner[21] % 20; king = winner[idx]
