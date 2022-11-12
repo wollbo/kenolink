@@ -125,16 +125,15 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
         return requestId;
     }
 
-    function convertToWinner(uint256[] memory _randomWords) public pure returns (uint256[20] memory) { // we just take one random word and segment it
+    function convertToWinner(uint256[] memory _randomWords) public pure returns (uint256[20] memory _winners) {
         uint len;
-        uint256[20] memory _winners;
         uint i;
         uint j;
         bool exists;
-        uint number;
         while (i < _randomWords.length - 1 && len < 20) { // two digit numbers
+            j = 0;
             exists = false; // reset here 
-            number = _randomWords[i] % 69 + 1; // we dont want zero
+            uint number = _randomWords[i] % 69 + 1; // we dont want zero
             while (j < len && exists == false) {
                 if (_winners[j] == number) {
                     exists = true;
@@ -145,10 +144,10 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
                 _winners[len] = number;
                 len++;
             }
-            i = i++;
+            i++;
         }
         return _winners;
-    } 
+    }
 
     function fulfillRandomWords(uint256 _requestId, uint256[] memory _randomWords) internal override {
         require(s_requests[_requestId].exists, 'request not found');
@@ -303,7 +302,7 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
         require(s_requests[lastRequestId].fulfilled == true, "Request not yet fulfilled");
         RequestStatus memory request = s_requests[lastRequestId];
         winner = convertToWinner(request.randomWords); // this needs error control 
-        king = 9; 
+        king = request.randomWords[request.randomWords[19] % 19]; 
         // king keno can be determined by
         // idx = winner[21] % 20; king = winner[idx]
         reserve = reserve + past;
