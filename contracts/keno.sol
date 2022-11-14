@@ -8,13 +8,13 @@ import "@chainlink/contracts/src/v0.8/ConfirmedOwner.sol";
 
 contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
     // 0 is not a playable number
-    // temporary solution: 1 + VRF % 70
+    // temporary solution: 1 + VRF % 69
     // not an equally distributed probability
     // probably better to do linear search
     enum State {PREPARING, RUNNING, FINISHED}
     mapping(address => mapping(int => bool)) active; // if player stake has been paid/withdrawn or not
     mapping(address => mapping(int => uint)) levels; // player Keno level, needs to be provided and cant simply be encoded in tips
-    mapping(address => mapping(int => uint256[12])) tips; // player chosen numbers for given round. 11 long, unplayed levels marked with 0, last for king keno
+    mapping(address => mapping(int => uint256[12])) tips; // player chosen numbers for given round. 11 long, unplayed levels marked with 0, last for king keno flag
     mapping(int => uint256[20]) winners; // map roundid to winners 
     mapping(int => uint) kings;
     int round; // current round
@@ -23,16 +23,20 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
     uint past; // sum of previous pool, subtracted by payouts
     uint reserve; // accumulated reserves by sum of pasts
 
-    address public contractOwner;
     uint256[20] public winner; // drawn by VRF
     uint public king; // drawn by VRF
     State public state;
+
+    address recipient;
 
     uint public MIN_PLAYERS = 1;
     uint public BASE_FEE = 5 * 10 ** 10; // 100 gwei minimum entry, for simplicity only offer one bet size. 100 gwei = 10 sek in comparison
 
     mapping(uint => uint256[12]) table; // keno win table - no king
     mapping(uint => uint256[12]) kable; // keno win table - with king
+
+    // Keeper 
+    address keeper;
 
     // VRF code below here
     event RequestSent(uint256 requestId, uint32 numWords);
@@ -65,9 +69,8 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
     // The default is 3, but you can set this higher.
     uint16 requestConfirmations = 3;
 
-    // For this example, retrieve 2 random values in one request.
     // Cannot exceed VRFCoordinatorV2.MAX_NUM_WORDS.
-    uint32 numWords = 100; // would be better to just select 1 word and segment it into 20 pairs of two
+    uint32 numWords = 100; // draw 20
 
     constructor(uint64 _subscriptionId)
         VRFConsumerBaseV2(0x7a1BaC17Ccc5b313516C5E16fb24f7659aA5ebed)
@@ -76,10 +79,8 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
         COORDINATOR = VRFCoordinatorV2Interface(0x7a1BaC17Ccc5b313516C5E16fb24f7659aA5ebed);
         s_subscriptionId = _subscriptionId;
 
-        contractOwner = msg.sender;
+        recipient = owner();
         round = 1;
-        pool = 0;
-        reserve = 0;
 
         // construction of regular keno table
         table[1] = [0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -125,10 +126,10 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
         return requestId;
     }
 
-    function convertToWinner(uint256[] memory _randomWords) public pure returns (uint256[20] memory _winners) {
-        uint len;
-        uint i;
-        uint j;
+    function convertToWinner(uint256[] memory _randomWords) public pure returns (uint256[20] memory _winners) { // we just take one random word and segment it
+        uint i; // randomWords index, always iterates
+        uint j; // _winners index, iterates if number is suitable
+        uint len; // lenght of _winners
         bool exists;
         while (i < _randomWords.length - 1 && len < 20) { // two digit numbers
             j = 0;
@@ -149,7 +150,7 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
         return _winners;
     }
 
-    function fulfillRandomWords(uint256 _requestId, uint256[] memory _randomWords) internal override {
+    function fulfillRandomWords(uint256 _requestId, uint256[] memory _randomWords) internal override { // who is allowed to fulfill?
         require(s_requests[_requestId].exists, 'request not found');
         s_requests[_requestId].fulfilled = true;
         s_requests[_requestId].randomWords = _randomWords;
@@ -162,19 +163,34 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
         return (request.fulfilled, request.randomWords);
     }
 
-    function newMinPlayers(uint _newPlayers) public {
-        require(msg.sender == contractOwner); // add require state == State.RUNNING
+    function newMinPlayers(uint _newPlayers) public onlyOwner {
+        require(state == State.FINISHED);
         MIN_PLAYERS = _newPlayers;
     }
 
-    function newBaseFee(uint _newFee) public {
-        require(msg.sender == contractOwner); // add require state == State.RUNNING
+    function newBaseFee(uint _newFee) public onlyOwner {
+        require(state == State.FINISHED);
         BASE_FEE = _newFee;
     }
 
-    function deposit() public payable {
-        require(msg.sender == contractOwner);
+    function deposit() public payable onlyOwner {
         reserve = reserve + msg.value;
+    }
+
+    function donate(uint _amount) public payable onlyOwner {
+        require(state == State.FINISHED);
+        require(_amount < reserve - past - pool); // can't transfer more than liabilities
+        payable(recipient).transfer(_amount);
+    }
+
+    function assignKeeper(address _keeper) public onlyOwner {
+        require(state == State.FINISHED || state == State.PREPARING);
+        keeper = _keeper;
+    }
+
+    function assignRecipient(address _newRecipient) public onlyOwner {
+        require(state == State.FINISHED);
+        recipient = _newRecipient;
     }
 
     function getRound() public view returns (int) {
@@ -277,43 +293,48 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
         require(state == State.PREPARING);
         require(active[msg.sender][_round] == true);
         require(round == _round, "Round already done");
-        // pay out based on fee calculation
-        // past = past - fee()
         if (tips[msg.sender][_round][11] > 0) {
-            payable(msg.sender).transfer(BASE_FEE * 2);
+            payable(msg.sender).transfer(BASE_FEE * 4);
+            pool = pool - BASE_FEE * 4;
         }
         else {
-            payable(msg.sender).transfer(BASE_FEE);
+            payable(msg.sender).transfer(BASE_FEE * 2);
+            pool = pool - BASE_FEE * 2;
         }
         players = players - 1;
         active[msg.sender][_round] = false;
     }
 
-    function draw() public payable { // called by keeper, draws VRF number
+    function vrf() public payable { // called by keeper, requests VRF number
+        require(msg.sender == owner() || msg.sender == keeper);
         require(state == State.PREPARING);
         require(players >= MIN_PLAYERS);
-        state = State.RUNNING; // should pause for 15 minutes in RUNNING state, then draw numbers
+        state = State.RUNNING; // should pause for 15 minutes in RUNNING state, then reset
         requestRandomWords();
         // requests random number from VRF ...
     }
 
-    function reset() public { // called by oracle callback
+    function draw() public { // called by keeper, draws VRF number
+        require(msg.sender == owner() || msg.sender == keeper);
         require(state == State.RUNNING);
         require(s_requests[lastRequestId].fulfilled == true, "Request not yet fulfilled");
         RequestStatus memory request = s_requests[lastRequestId];
         winner = convertToWinner(request.randomWords); // this needs error control 
-        king = request.randomWords[request.randomWords[19] % 19]; 
-        // king keno can be determined by
-        // idx = winner[21] % 20; king = winner[idx]
+        king = request.randomWords[request.randomWords[19] % 19]; // saves computation
+        winners[round] = winner;
+        kings[round] = king;
+        state = State.FINISHED;
+    }
+
+    function reset() public { // called by keeper after a small time window in which owner can update parameters
+        require(msg.sender == owner() || msg.sender == keeper);
+        require(state == State.FINISHED);
         reserve = reserve + past;
-        winners[round] = winner; // do this in callback function
-        kings[round] = king; // and this
-        round = round + 1; // this is the start of the real reset function
+        round = round + 1; 
         past = pool;
         pool = 0;
         players = 0;
         state = State.PREPARING;
-        // balance = reserve + past + pool
     }
 
     function calculate(uint _claim) private returns (uint) { // calculates how much you won; balances with vault to maintain protocol solvency
@@ -343,25 +364,9 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
         }
     }
 
-    function payout(int _round) public payable { // round participation is stored in DB
+    function payout(int _round) public payable { // problem; previous winners should not have access to "past" pool of last round
         require(state == State.PREPARING || state == State.FINISHED);
         require(active[msg.sender][_round] == true, "Player is not active in this round");
-        // this needs some thought - how does smart contract know how many have won and how much?
-        // what happens if there are more winning claims than deposited funds in a round?
-        /*
-        / - one solution is to maintain a surplus at all times 
-        / otherwise necessary to iterate over all deposited bets in a round - not feasible
-        / 
-        / - early claimers get their "full" reward while latecomers get nothing
-        / maintains protocol solvency, benefits early claimants but bad user experience
-        /
-        / - maintain and display an excess vault collected from protocol profits, only used as "insurance"
-        / early claimants get their full reward from fee pool for the current round (claimed before next round has ended)
-        / late claimants get their full reward from insurance pool 
-        / OR a given % of the insurance pool (whichever number is smallest)
-        / 
-        / - insurance vault should also be used to fund charity/ideal organization
-        */
         uint wins = count(tips[msg.sender][_round], levels[msg.sender][_round], winners[_round]);
         if (tips[msg.sender][_round][11] > 0 && kingKeno(tips[msg.sender][_round], kings[_round])) {
             if (winnings(levels[msg.sender][_round], wins, true) > 0) {
