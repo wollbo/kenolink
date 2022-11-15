@@ -2,8 +2,11 @@
 
 cl-hackathon fall 2022
 
-## Run locally
+## To start frontend
 
     cd kenolink
-    npm install
-    npm run dev
+    npm i
+    npm run start
+
+
+## Backend
