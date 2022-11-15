@@ -35,6 +35,13 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
     mapping(uint => uint256[12]) table; // keno win table - no king
     mapping(uint => uint256[12]) kable; // keno win table - with king
 
+    // Events
+    event playerEntered(int round, uint level, uint256[12] numbers); // contains both tips and king bool
+    event playerWithdrew(int round);
+    event playerPayout(int round, uint wins, bool king, uint winnings);
+    event newWinner(int round, uint256[20] winners);
+    event newKing(int round, uint king);
+
     // Keeper 
     address keeper;
 
@@ -215,7 +222,11 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
 
     function isActive(int _round) public view returns (bool) {
         return active[msg.sender][_round];
-    } 
+    }
+
+    function historicTips(int _round) public view returns (uint256[12] memory) {
+        return tips[msg.sender][_round];
+    }
 
     function historicWinners(int _round) public view returns (uint256[20] memory) {
         return winners[_round];
@@ -273,7 +284,7 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
 
     function winnings(uint _level, uint _wins, bool _keno) public view returns (uint) { // compare Keno outside this function
         require(_level >= _wins);
-        if (_keno) { // all payout tables are calculated with multiple of 10, minamount is 5
+        if (_keno) { // all payout tables are calculated with multiple of 10, base amount is 5
             return 2 * kable[_level][_wins];
         }
         return 2 * table[_level][_wins];
@@ -287,6 +298,7 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
         levels[msg.sender][round] = _level;
         pool = pool + msg.value;
         players = players + 1;
+        emit playerEntered(round, _level, _numbers);
     }
 
     function withdraw(int _round) public payable {
@@ -303,6 +315,7 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
         }
         players = players - 1;
         active[msg.sender][_round] = false;
+        emit playerWithdrew(_round);
     }
 
     function vrf() public payable { // called by keeper, requests VRF number
@@ -324,6 +337,8 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
         winners[round] = winner;
         kings[round] = king;
         state = State.FINISHED;
+        emit newWinner(round, winner);
+        emit newKing(round, king);
     }
 
     function reset() public { // called by keeper after a small time window in which owner can update parameters
@@ -346,39 +361,73 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
         */
         if (_claim <= past) {
             past = past - _claim;
-            return _claim;
         }
         else if (_claim - past < reserve / 2 && past > 0) {
             reserve = reserve - _claim + past; // possible that these state changes should happen outside
             past = 0;
-            return _claim;
         }
         else if (_claim < reserve / 2) {
             reserve = reserve - _claim;
-            return _claim;
         }
         else {
             _claim = reserve / 2;
             reserve = _claim;
-            return _claim;
         }
+        return _claim;
     }
 
     function payout(int _round) public payable { // problem; previous winners should not have access to "past" pool of last round
         require(state == State.PREPARING || state == State.FINISHED);
         require(active[msg.sender][_round] == true, "Player is not active in this round");
         uint wins = count(tips[msg.sender][_round], levels[msg.sender][_round], winners[_round]);
-        if (tips[msg.sender][_round][11] > 0 && kingKeno(tips[msg.sender][_round], kings[_round])) {
-            if (winnings(levels[msg.sender][_round], wins, true) > 0) {
-                payable(msg.sender).transfer(calculate(BASE_FEE * winnings(levels[msg.sender][_round], wins, true)));
-                active[msg.sender][_round] = false;
+        if (wins > 0) {
+            if (tips[msg.sender][_round][11] > 0 && kingKeno(tips[msg.sender][_round], kings[_round])) {
+                if (winnings(levels[msg.sender][_round], wins, true) > 0) {
+                    payable(msg.sender).transfer(calculate(BASE_FEE * winnings(levels[msg.sender][_round], wins, true)));
+                    active[msg.sender][_round] = false;
+                    emit playerPayout(_round, wins, true, BASE_FEE * winnings(levels[msg.sender][_round], wins, true));
+                }
+            }
+            else {
+                if (winnings(levels[msg.sender][_round], wins, false) > 0) {
+                    payable(msg.sender).transfer(calculate(BASE_FEE * winnings(levels[msg.sender][_round], wins, false)));
+                    active[msg.sender][_round] = false;
+                    emit playerPayout(_round, wins, false, BASE_FEE * winnings(levels[msg.sender][_round], wins, true));
+                }
             }
         }
         else {
-            if (winnings(levels[msg.sender][_round], wins, false) > 0) {
-                payable(msg.sender).transfer(calculate(BASE_FEE * winnings(levels[msg.sender][_round], wins, false)));
-                active[msg.sender][_round] = false;
+            emit playerPayout(_round, wins, false, 0);
+        }
+        active[msg.sender][_round] = false;
+    }
+
+    /* complete this later
+    function payout(int _round) public payable { // problem; previous winners should not have access to "past" pool of last round
+        require(state == State.PREPARING || state == State.FINISHED);
+        require(active[msg.sender][_round] == true, "Player is not active in this round");
+        uint wins = count(tips[msg.sender][_round], levels[msg.sender][_round], winners[_round]);
+        uint _winnings = winnings()
+        if (wins > 0) {
+            if (tips[msg.sender][_round][11] > 0 && kingKeno(tips[msg.sender][_round], kings[_round])) {
+                if (winnings(levels[msg.sender][_round], wins, true) > 0) {
+                    payable(msg.sender).transfer(calculate(BASE_FEE * winnings(levels[msg.sender][_round], wins, true)));
+                    active[msg.sender][_round] = false;
+                    emit playerPayout(_round, wins, true, BASE_FEE * winnings(levels[msg.sender][_round], wins, true));
+                }
+            }
+            else {
+                if (winnings(levels[msg.sender][_round], wins, false) > 0) {
+                    payable(msg.sender).transfer(calculate(BASE_FEE * winnings(levels[msg.sender][_round], wins, false)));
+                    active[msg.sender][_round] = false;
+                    emit playerPayout(_round, wins, false, BASE_FEE * winnings(levels[msg.sender][_round], wins, true));
+                }
             }
         }
+        else {
+            emit playerPayout(_round, wins, false, 0);
+        }
+        active[msg.sender][_round] = false;
     }
+    */
 }
