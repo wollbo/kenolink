@@ -420,7 +420,7 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
                 if (winnings(levels[msg.sender][_round], wins, false) > 0) {
                     payable(msg.sender).transfer(calculate(BASE_FEE * winnings(levels[msg.sender][_round], wins, false)));
                     active[msg.sender][_round] = false;
-                    emit playerPayout(_round, wins, false, BASE_FEE * winnings(levels[msg.sender][_round], wins, true));
+                    emit playerPayout(_round, wins, false, BASE_FEE * winnings(levels[msg.sender][_round], wins, false));
                 }
             }
         }
