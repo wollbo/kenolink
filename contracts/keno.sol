@@ -17,7 +17,7 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
     mapping(address => mapping(int => uint256[12])) tips; // player chosen numbers for given round. 11 long, unplayed levels marked with 0, last for king keno flag
     mapping(int => uint256[20]) winners; // map roundid to winners 
     mapping(int => uint) kings;
-    int round; // current round
+    int round; // current round should maybe be uint
     uint players; // number of players in the current round
     uint pool; // carries amount of bets for upcoming round
     uint past; // sum of previous pool, subtracted by payouts
@@ -36,9 +36,9 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
     mapping(uint => uint256[12]) kable; // keno win table - with king
 
     // Events
-    event playerEntered(int round, uint level, uint256[12] numbers); // contains both tips and king bool
-    event playerWithdrew(int round);
-    event playerPayout(int round, uint wins, bool king, uint winnings);
+    event playerEntered(address player, int round, uint level, uint256[12] numbers); // contains both tips and king bool
+    event playerWithdrew(address player, int round);
+    event playerPayout(address player, int round, uint wins, bool king, uint winnings);
     event newWinner(int round, uint256[20] winners);
     event newKing(int round, uint king);
 
@@ -298,7 +298,7 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
         levels[msg.sender][round] = _level;
         pool = pool + msg.value;
         players = players + 1;
-        emit playerEntered(round, _level, _numbers);
+        emit playerEntered(msg.sender, round, _level, _numbers);
     }
 
     function withdraw(int _round) public payable {
@@ -315,7 +315,7 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
         }
         players = players - 1;
         active[msg.sender][_round] = false;
-        emit playerWithdrew(_round);
+        emit playerWithdrew(msg.sender, _round);
     }
 
     function vrf() public payable { // called by keeper, requests VRF number
@@ -385,19 +385,19 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
                 if (winnings(levels[msg.sender][_round], wins, true) > 0) {
                     payable(msg.sender).transfer(calculate(BASE_FEE * winnings(levels[msg.sender][_round], wins, true)));
                     active[msg.sender][_round] = false;
-                    emit playerPayout(_round, wins, true, BASE_FEE * winnings(levels[msg.sender][_round], wins, true));
+                    emit playerPayout(msg.sender, _round, wins, true, BASE_FEE * winnings(levels[msg.sender][_round], wins, true));
                 }
             }
             else {
                 if (winnings(levels[msg.sender][_round], wins, false) > 0) {
                     payable(msg.sender).transfer(calculate(BASE_FEE * winnings(levels[msg.sender][_round], wins, false)));
                     active[msg.sender][_round] = false;
-                    emit playerPayout(_round, wins, false, BASE_FEE * winnings(levels[msg.sender][_round], wins, true));
+                    emit playerPayout(msg.sender, _round, wins, false, BASE_FEE * winnings(levels[msg.sender][_round], wins, false));
                 }
             }
         }
         else {
-            emit playerPayout(_round, wins, false, 0);
+            emit playerPayout(msg.sender, _round, wins, false, 0);
         }
         active[msg.sender][_round] = false;
     }
@@ -420,7 +420,7 @@ contract Keno is VRFConsumerBaseV2, ConfirmedOwner {
                 if (winnings(levels[msg.sender][_round], wins, false) > 0) {
                     payable(msg.sender).transfer(calculate(BASE_FEE * winnings(levels[msg.sender][_round], wins, false)));
                     active[msg.sender][_round] = false;
-                    emit playerPayout(_round, wins, false, BASE_FEE * winnings(levels[msg.sender][_round], wins, false));
+                    emit playerPayout(_round, wins, false, BASE_FEE * winnings(levels[msg.sender][_round], wins, true));
                 }
             }
         }
