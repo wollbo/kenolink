@@ -1,0 +1,28 @@
+.container {
+    box-sizing: border-box;
+    margin: 30px auto;
+    padding: 30px;
+    width: 500px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background: #eee;
+  }
+  
+  .select {
+    width: 300px;
+  }
+  
+  .select option {
+    padding: 10px;
+    border-bottom: 1px solid #eee;
+  }
+  
+  .number {
+    padding: 6px 25px;
+    margin: 10px;
+    background: orange;
+    display: inline-block;
+    border-radius: 100px;
+  }
