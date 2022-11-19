@@ -5,7 +5,9 @@ import Header from './layout/Header';
 import Main from './layout/Main';
 import Footer from './layout/Footer';
 import { VStack, Spacer } from '@chakra-ui/react';
-import { Nfts } from './views/Nfts';
+import { Play } from './views/Play';
+import { Past } from './views/Past';
+
 
 function App() {
   return (
@@ -14,7 +16,8 @@ function App() {
       <Main>
         <Routes>
           <Route index element={<Home />} />
-          <Route path="nfts" element={<Nfts />} />
+          <Route path="play" element={<Play />} />
+          <Route path="past" element={<Past />} />
         </Routes>
       </Main>
       <Spacer />
