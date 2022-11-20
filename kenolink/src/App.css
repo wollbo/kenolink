@@ -1,28 +1,75 @@
 .container {
-    box-sizing: border-box;
-    margin: 30px auto;
-    padding: 30px;
-    width: 500px;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    background: #eee;
-  }
-  
-  .select {
-    width: 300px;
-  }
-  
-  .select option {
-    padding: 10px;
-    border-bottom: 1px solid #eee;
-  }
-  
-  .number {
-    padding: 6px 25px;
-    margin: 10px;
-    background: orange;
-    display: inline-block;
-    border-radius: 100px;
-  }
+  box-sizing: border-box;
+  margin: 30px auto;
+  padding: 30px;
+  width: 500px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background: #eee;
+}
+
+.select {
+  width: 300px;
+}
+
+.select option {
+  padding: 10px;
+  border-bottom: 1px solid #eee;
+}
+
+.number {
+  padding: 6px 25px;
+  margin: 10px;
+  background: orange;
+  display: inline-block;
+  border-radius: 100px;
+}
+
+.square_de_selected {
+  background: #fff;
+  border: 1px solid #999;
+  float: left;
+  font-size: 24px;
+  font-weight: bold;
+  line-height: 34px;
+  height: 34px;
+  margin-right: -1px;
+  margin-top: -1px;
+  padding: 0;
+  text-align: center;
+  width: 34px;
+}
+
+.square_selected {
+  background: rgb(142, 64, 64);
+  border: 1px solid #999;
+  float: left;
+  font-size: 24px;
+  font-weight: bold;
+  line-height: 34px;
+  height: 34px;
+  margin-right: -1px;
+  margin-top: -1px;
+  padding: 0;
+  text-align: center;
+  width: 34px;
+}
+
+
+
+.square:focus {
+  outline: none;
+}
+
+
+.board-row:after {
+  clear: both;
+  content: "";
+  display: table;
+}
+
+.status {
+  margin-bottom: 10px;
+}
