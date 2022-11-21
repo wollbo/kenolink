@@ -1,3 +1,4 @@
+![logo](https://user-images.githubusercontent.com/34742686/202999311-e0f67890-2354-4550-b156-3eabd0232936.png)
 # Kenolink
 
 A digital keno lottery powered by Chainlink VRF and Chainlink Automation
