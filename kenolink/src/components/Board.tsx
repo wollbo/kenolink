@@ -1,14 +1,14 @@
-import React, { useState } from 'react';
+import React from 'react';
 import Square from "./Square";
 
 type Props = {
     squares: Array<number>;
+    setselectedNumbers?: any;
+    selectedNumbers?: any;
 
 };
 const Board: React.FC<Props> = (props) => {
 
-
-    const [selectedNumbers, setselectedNumbers] = useState([]);
 
 
 

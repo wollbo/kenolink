@@ -13,7 +13,8 @@ export const Navigation = () => {
   return (
     <HStack>
       <Item to="/">Home</Item>
-      <Item to="/nfts">Evm NFTs</Item>
+      <Item to="/play">Play</Item>
+      <Item to="/past">Past</Item>
     </HStack>
   );
 };

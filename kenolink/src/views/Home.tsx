@@ -1,9 +1,8 @@
 import React from 'react';
 import { VStack, Heading } from '@chakra-ui/react';
 
-
-
 const Home = () => {
+
 
   return (
     <VStack alignItems={'start'}>
